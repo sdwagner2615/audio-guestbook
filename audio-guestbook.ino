@@ -37,7 +37,8 @@
 #define SDCARD_SCK_PIN   14
 // And those used for inputs
 #define HOOK_PIN 0
-#define PLAYBACK_BUTTON_PIN 1
+//#define PLAYBACK_BUTTON_PIN 1
+#define PLAYBACK_BUTTON_PIN A0
 
 #define noINSTRUMENT_SD_WRITE
 
@@ -46,10 +47,12 @@
 // Inputs
 AudioSynthWaveform          waveform1; // To create the "beep" sfx
 AudioInputI2S               i2s2; // I2S input from microphone on audio shield
-AudioPlaySdWavX              playWav1; // Play 44.1kHz 16-bit PCM greeting WAV file
+AudioPlaySdWavX             playWav1; // Play 44.1kHz 16-bit PCM greeting WAV file
+// Outputs
 AudioRecordQueue            queue1; // Creating an audio buffer in memory before saving to SD
 AudioMixer4                 mixer; // Allows merging several inputs to same output
 AudioOutputI2S              i2s1; // I2S interface to Speaker/Line Out on Audio shield
+// Connections
 AudioConnection patchCord1(waveform1, 0, mixer, 0); // wave to mixer 
 AudioConnection patchCord3(playWav1, 0, mixer, 1); // wav file playback mixer
 AudioConnection patchCord4(mixer, 0, i2s1, 0); // mixer output to speaker (L)
@@ -64,7 +67,8 @@ File frec;
 
 // Use long 40ms debounce time on both switches
 Bounce buttonRecord = Bounce(HOOK_PIN, 40);
-Bounce buttonPlay = Bounce(PLAYBACK_BUTTON_PIN, 40);
+//Bounce buttonPlay = Bounce(PLAYBACK_BUTTON_PIN, 80);
+bool replayButtonIsPressed = false;
 
 // Keep track of current state of the device
 enum Mode {Initialising, Ready, Prompting, Recording, Playing};
@@ -88,7 +92,6 @@ unsigned long recByteSaved = 0L;
 unsigned long NumSamples = 0L;
 byte byte1, byte2, byte3, byte4;
 
-
 void setup() {
 
   Serial.begin(9600);
@@ -100,7 +103,7 @@ void setup() {
   print_mode();
   // Configure the input pins
   pinMode(HOOK_PIN, INPUT_PULLUP);
-  pinMode(PLAYBACK_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(PLAYBACK_BUTTON_PIN, INPUT);
 
   // Audio connections require memory, and the record queue
   // uses this memory to buffer incoming audio.
@@ -137,16 +140,16 @@ void setup() {
 
 
   // mandatory to begin the MTP session.
-    MTP.begin();
+  MTP.begin();
 
   // Add SD Card
-//    MTP.addFilesystem(SD, "SD Card");
-    MTP.addFilesystem(SD, "Kais Audio guestbook"); // choose a nice name for the SD card volume to appear in your file explorer
-    Serial.println("Added SD card via MTP");
-    MTPcheckInterval = MTP.storage()->get_DeltaDeviceCheckTimeMS();
+  //    MTP.addFilesystem(SD, "SD Card");
+  MTP.addFilesystem(SD, "Audio Guestbook"); // choose a nice name for the SD card volume to appear in your file explorer
+  Serial.println("Added SD card via MTP");
+  MTPcheckInterval = MTP.storage()->get_DeltaDeviceCheckTimeMS();
     
     // Value in dB
-//  sgtl5000_1.micGain(15);
+  //sgtl5000_1.micGain(15);
   sgtl5000_1.micGain(5); // much lower gain is required for the AOM5024 electret capsule
 
   // Synchronise the Time object used in the program code with the RTC time provider.
@@ -163,17 +166,18 @@ void setup() {
 void loop() {
   // First, read the buttons
   buttonRecord.update();
-  buttonPlay.update();
+  // buttonPlay.update();
 
   switch(mode){
     case Mode::Ready:
       // Falling edge occurs when the handset is lifted --> 611 telephone
-      if (buttonRecord.fallingEdge()) {
+      // if (buttonRecord.fallingEdge()) {
+      if (buttonRecord.risingEdge()) {
         Serial.println("Handset lifted");
         mode = Mode::Prompting; print_mode();
       }
-      else if(buttonPlay.fallingEdge()) {
-        //playAllRecordings();
+      // else if(buttonPlay.fallingEdge()) {
+      else if (isReplayButtonPressed()) {
         playLastRecording();
       }
       break;
@@ -188,14 +192,16 @@ void loop() {
       while (!playWav1.isStopped()) {
         // Check whether the handset is replaced
         buttonRecord.update();
-        buttonPlay.update();
+        //buttonPlay.update();
         // Handset is replaced
-        if(buttonRecord.risingEdge()) {
+        // if(buttonRecord.risingEdge()) {
+        if(buttonRecord.fallingEdge()) {
           playWav1.stop();
           mode = Mode::Ready; print_mode();
           return;
         }
-        if(buttonPlay.fallingEdge()) {
+        // if(buttonPlay.fallingEdge()) {
+        if(isReplayButtonPressed()) {
           playWav1.stop();
           //playAllRecordings();
           playLastRecording();
@@ -215,7 +221,8 @@ void loop() {
 
     case Mode::Recording:
       // Handset is replaced
-      if(buttonRecord.risingEdge()){
+      //if(buttonRecord.risingEdge()){
+      if(buttonRecord.fallingEdge()){
         // Debug log
         Serial.println("Stopping Recording");
         // Stop recording
@@ -342,57 +349,6 @@ void stopRecording() {
   setMTPdeviceChecks(true); // enable MTP device checks, recording is finished
 }
 
-
-void playAllRecordings() {
-  // Recording files are saved in the root directory
-  File dir = SD.open("/");
-  
-  while (true) {
-    File entry =  dir.openNextFile();
-    if (strstr(entry.name(), "greeting"))
-    {
-       entry =  dir.openNextFile();
-    }
-    if (!entry) {
-      // no more files
-      entry.close();
-      end_Beep();
-      break;
-    }
-    //int8_t len = strlen(entry.name()) - 4;
-//    if (strstr(strlwr(entry.name() + (len - 4)), ".raw")) {
-//    if (strstr(strlwr(entry.name() + (len - 4)), ".wav")) {
-    // the lines above throw a warning, so I replace them with this (which is also easier to read):
-    if (strstr(entry.name(), ".wav") || strstr(entry.name(), ".WAV")) {
-      Serial.print("Now playing ");
-      Serial.println(entry.name());
-      // Play a short beep before each message
-      waveform1.amplitude(beep_volume);
-      wait(750);
-      waveform1.amplitude(0);
-      // Play the file
-      playWav1.play(entry.name());
-      mode = Mode::Playing; print_mode();
-    }
-    entry.close();
-
-//    while (playWav1.isPlaying()) { // strangely enough, this works for playRaw, but it does not work properly for playWav
-    while (!playWav1.isStopped()) { // this works for playWav
-      buttonPlay.update();
-      buttonRecord.update();
-      // Button is pressed again
-//      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
-      if(buttonPlay.fallingEdge() || buttonRecord.risingEdge()) { 
-        playWav1.stop();
-        mode = Mode::Ready; print_mode();
-        return;
-      }   
-    }
-  }
-  // All files have been played
-  mode = Mode::Ready; print_mode();
-}
-
 void playLastRecording() {
   // Find the first available file number
   uint16_t idx = 0; 
@@ -405,23 +361,25 @@ void playLastRecording() {
      break;
       }
   }
-      // now play file with index idx == last recorded file
-      snprintf(filename, 11, " %05d.wav", idx);
-      Serial.println(filename);
-      playWav1.play(filename);
-      mode = Mode::Playing; print_mode();
-      while (!playWav1.isStopped()) { // this works for playWav
-      buttonPlay.update();
-      buttonRecord.update();
-      // Button is pressed again
-//      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
-      if(buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
-        playWav1.stop();
-        mode = Mode::Ready; print_mode();
-        return;
-      }   
-    }
-      // file has been played
+
+  // now play file with index idx == last recorded file
+  snprintf(filename, 11, " %05d.wav", idx);
+  Serial.println(filename);
+  playWav1.play(filename);
+  mode = Mode::Playing; print_mode();
+  while (!playWav1.isStopped()) { // this works for playWav
+    //buttonPlay.update();
+    buttonRecord.update();
+    // Button is pressed again
+    // if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
+    // if(buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
+    if(isReplayButtonPressed() || buttonRecord.fallingEdge()) {
+      playWav1.stop();
+      mode = Mode::Ready; print_mode();
+      return;
+    }   
+  }
+    // file has been played
   mode = Mode::Ready; print_mode();  
   end_Beep();
 }
@@ -452,11 +410,11 @@ void wait(unsigned int milliseconds) {
 
   while (msec <= milliseconds) {
     buttonRecord.update();
-    buttonPlay.update();
+    //buttonPlay.update();
     if (buttonRecord.fallingEdge()) Serial.println("Button (pin 0) Press");
-    if (buttonPlay.fallingEdge()) Serial.println("Button (pin 1) Press");
+    //if (buttonPlay.fallingEdge()) Serial.println("Button (pin 1) Press");
     if (buttonRecord.risingEdge()) Serial.println("Button (pin 0) Release");
-    if (buttonPlay.risingEdge()) Serial.println("Button (pin 1) Release");
+    //if (buttonPlay.risingEdge()) Serial.println("Button (pin 1) Release");
   }
 }
 
@@ -543,4 +501,21 @@ void print_mode(void) { // only for debugging
   else if(mode == Mode::Playing)    Serial.println(" Playing");
   else if(mode == Mode::Initialising)  Serial.println(" Initialising");
   else Serial.println(" Undefined");
+}
+
+bool isReplayButtonPressed() {
+  float voltage = analogRead(PLAYBACK_BUTTON_PIN) * (3.3 / 1023.0);
+  if (voltage < 0.1) {  // 0.4 is the threshold for a button press
+    if(replayButtonIsPressed) {
+      // If the button is currently being held, then it wasn't pressed
+      return false;
+    } else {
+      // The button wasn't previously pressed, but now is.
+      replayButtonIsPressed = true;
+    }
+  } else {
+    // The button is not pressed
+    replayButtonIsPressed = false;
+  }
+  return replayButtonIsPressed;
 }
