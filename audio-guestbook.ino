@@ -230,6 +230,14 @@ void loop() {
         // Play audio tone to confirm recording has ended
         end_Beep();
       }
+      else if(isReplayButtonPressed()) {
+        // Debug log
+        Serial.println("Stopping Recording");
+        // Stop recording
+        stopRecording();
+        playLastRecording();
+        return;
+      }
       else {
         continueRecording();
       }
